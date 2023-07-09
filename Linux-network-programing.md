@@ -8,10 +8,46 @@ HTTP、FTP、TCP/IP、ARP、
 
 ## TCP
 
-+ 三次握手
-+ 四次挥手
+### TCP通信时序
+
+![](imgs/TCP.png)
+
+
+
+### TCP状态转换
+
+![](imgs/TCP-state.png)
+
++ 2MSL
+
+  > 注：2MSL超时期间，可通过设置**端口复用**，以使server在未完全断开前重新监听
+
+  ```c
+  int opt = 1;
+  setsockopt(lfd,SOL_SOCKET,SO_REUSEADDR,(void *)&opt,sizeof());
+  ```
+
 + 半关闭
+
+
+
+
+
+### others
+
++ 三次握手
+
+  ![](imgs/TCP-3.png)
+
++ 四次挥手
+
+  ![](imgs/TCP-4.png)
+
 + 滑动窗口
+
+
+
+
 
 ## IP
 
@@ -22,7 +58,13 @@ HTTP、FTP、TCP/IP、ARP、
 ## netcat
 
 ```sh
-nc 127.1 9527
+nc 127.1 9999
+```
+
+## netstat
+
+```sh
+netstat -apn | grep port/client
 ```
 
 
@@ -284,7 +326,182 @@ return 0;
 
 ## 多进程
 
+```c
+//server.cpp
+#define SERV_PORT 9999
+void sys_err(int ret,const char* str){
+    if(ret == -1){
+        perror(str);
+        exit(-1);
+    }
+}
+void recycle_child_process(int signum){
+    pid_t wpid;
+    int status;
+    while((wpid = waitpid(-1,&status,WNOHANG)) > 0){
+        if(WIFEXITED(status))
+            cout<<"-------------------wait for child with pid "<<wpid<<" & return "<<WEXITSTATUS(status)<<endl;
+    }
+}
+int main(){
+    int lfd,cfd;
+    int ret;
+    pid_t pid;
+    char buf[BUFSIZ],buf_ip[BUFSIZ];
+    //阻塞信号
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set,SIGCHLD);
+    sigprocmask(SIG_BLOCK,&set,NULL);
+    
+    struct sockaddr_in saddr,caddr;
+    socklen_t caddr_len = sizeof(caddr);
+    saddr.sin_family = AF_INET;
+    saddr.sin_port = htons(SERV_PORT);
+    saddr.sin_addr.s_addr = htonl(INADDR_ANY);
+
+    lfd = socket(AF_INET,SOCK_STREAM,0);
+    ret = bind(lfd,(struct sockaddr*)&saddr,sizeof(saddr));
+    ret = listen(lfd,128);
+
+    while (1)
+    {
+        cfd = accept(lfd,(struct sockaddr*)&caddr,&caddr_len);
+        cout<<"===== cfd："<<cfd<<endl;
+
+        if(cfd>0){
+            pid = fork();
+        }else{
+            continue;
+        }
+
+        if(pid<0){//error
+            sys_err(pid,"fork error!");
+        }else if(pid==0){//子进程
+            //子进程关闭lfd，退出循环
+            close(lfd);
+            break;
+        }else{//父进程
+            //注册信号捕捉函数，回收子进程
+            struct sigaction act;
+            act.sa_handler = recycle_child_process;
+            sigemptyset(&act.sa_mask);
+            act.sa_flags=0;
+
+            sigaction(SIGCHLD,&act,NULL);
+            sigprocmask(SIG_UNBLOCK,&set,NULL);
+            //父进程关闭cfd，继续循环监听
+            close(cfd);
+            continue;
+        }
+    }
+    //子进程业务逻辑
+    if(pid == 0){
+        cout<<"create child process "<<getpid()<<endl;
+        cout<<"request from ip: "
+            <<inet_ntop(AF_INET,&caddr.sin_addr.s_addr,buf_ip,sizeof(buf_ip))
+            <<":"<<ntohs(caddr.sin_port)<<endl;
+        while(1){
+            //子进程业务函数
+            int n = read(cfd,buf,1024);
+            if(n==0){
+                close(cfd);
+                exit(1);
+            }
+            for(int i=0;i<n;i++){
+                buf[i] = toupper(buf[i]);
+            }
+            write(cfd,buf,n);
+            write(STDOUT_FILENO,buf,n);
+            // cout<<buf<<flush;
+        }
+    }
+    close(lfd);
+    close(cfd);
+    return 0;
+}
+```
+
+
+
 ## 多线程
+
+```c
+//server.cpp
+#define SERV_PORT 9999
+//客户端信息结构体
+struct client_info{
+    int connfd;
+    struct sockaddr_in addr;
+};
+//子线程回调函数
+void *callback(void *arg){
+    struct client_info *info = (struct client_info *)arg;
+    char buf[BUFSIZ];
+    //打印客户端地址信息
+    cout<<info->connfd
+        <<" client ip: "
+        <<inet_ntop(AF_INET,&info->addr.sin_addr.s_addr,buf,sizeof(buf))
+        <<" port: "
+        <<ntohs(info->addr.sin_port)
+        <<endl;
+    //业务逻辑
+    while (1)
+    {
+        //读取客户端数据
+        int n = read(info->connfd,buf,sizeof(buf));
+        if(n==0)
+            break;
+        for(int i=0;i<n;i++){
+            buf[i] = toupper(buf[i]);
+        }
+        //写出数据
+        write(info->connfd,buf,n);
+        write(STDOUT_FILENO,buf,n);
+    }
+    pthread_exit(info);
+}
+
+int main(){
+    int sfd,cfd;
+    int ret=0,i=0;
+    socklen_t caddrlen;
+    pthread_t tid;
+    struct client_info infos[156];
+    //填写地址信息
+    struct sockaddr_in saddr,caddr;
+    bzero(&saddr,sizeof(saddr));    //地址结构清零
+    saddr.sin_family = AF_INET;
+    saddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    saddr.sin_port = htons(SERV_PORT);
+    //创建socket
+    sfd = socket(AF_INET,SOCK_STREAM,0);
+    //绑定地址信息
+    ret = bind(sfd,(struct sockaddr*)&saddr,sizeof(saddr));
+    //设置监听上限
+    ret = listen(sfd,5);
+    caddrlen = sizeof(caddr);
+    while(1){
+        //阻塞监听客户端连接
+        cfd = accept(sfd,(struct sockaddr*)&caddr,&caddrlen);
+        if(cfd<0){
+            continue;
+        }
+        //填写客户端信息结构体
+        infos[i].connfd = cfd;
+        infos[i].addr = caddr;
+        //创建子线程
+        pthread_create(&tid,NULL,*callback,(void*)&infos[i]);
+        //设置子线程分离，防止僵尸线程
+        pthread_detach(tid);
+        i++;
+    }    
+    //关闭socket
+    close(sfd);
+    close(cfd);
+    return 0;
+}
+```
 
 
 
