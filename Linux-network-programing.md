@@ -505,5 +505,362 @@ int main(){
 
 
 
+# 多路IO转接
+
+## select
+
+### 简介
+
+![](imgs/select.png)
+
+原理：借助内核，select来监听客户端连接、数据通信事件
+
+优点：跨平台	win、linux、macOS、Unix...
+
+缺点：
+
++ 监听上限受文件描述符限制，最大1024
++ 检测满足条件的fd，自己添加业务逻辑提高小。提高了编码难度
+
+
+
+### func
+
+```c
+#include <sys/select.h>
+void FD_ZERO(fd_set *set);//清空文件描述符集合
+void FD_SET(int fd,fd_set *set);//将待监听的文件描述符，添加到监听集合中
+void FD_CLR(int fd,fd_set *set);//将一个文件描述符从监听集合中移除
+int FD_ISSET(int fd,fd_set *set);//判断一个文件描述符是否在监听集合中
+
+int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout);
+/*
+args:
+	nfds：文件描述符个数。监听的所有文件描述符中，最大文件描述符+1
+	readfds：读文件描述符集合。
+	writefds：写文件描述符集合。	 NULL
+	exceptfds：异常文件描述符集合。NULL
+	timeout：
+		>0：设置监听超时时长
+		NULL：阻塞监听
+		0：非阻塞监听，忙轮询
+return:
+*/
+```
+
+### template
+
+```c
+//template
+#define PORT 9999
+int main(){
+    int lfd,cfd;
+    socklen_t caddrlen;
+    char buf[BUFSIZ], client_ip_buf[1024];
+    //填写地址信息
+    struct sockaddr_in saddr,caddr;
+    saddr.sin_family = AF_INET;
+    saddr.sin_port = htons(PORT);
+    saddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    //创建socket
+    lfd = socket(AF_INET,SOCK_STREAM,0);
+    //绑定地址信息
+    bind(lfd,(struct sockaddr*)&saddr,sizeof(saddr));
+    //设置监听上限
+    listen(lfd,5);
+	//================================================================ select部分
+    fd_set rset, gset;          //定义读集合，全局(备份)集合
+    int ret,n,i=0,maxfd=0;
+    maxfd = lfd;                //最大文件描述符
+
+    FD_ZERO(&gset);             //清空监听集合
+    FD_SET(lfd,&gset);          //将待监听fd添加到监听集合中
+    while(1){
+        rset = gset;            
+        ret = select(maxfd+1,&rset,NULL,NULL,NULL); //使用select监听集合
+        if(ret<0){
+            cout<<"select error!"<<endl;
+        }
+        if(FD_ISSET(lfd,&rset)){            //lfd满足监听的读事件
+            caddrlen = sizeof(caddr);
+            cfd = accept(lfd,(struct sockaddr*)&caddr,&caddrlen);   //建立连接 --- 不会阻塞
+            FD_SET(cfd,&gset);      //将新产生的cfd添加到监听集合中，监听读事件
+            if(maxfd<cfd)           //修改maxfd
+                maxfd=cfd;
+            if(ret==1)              //select只返回一个，故为lfd，继续循环
+                continue;
+        }
+        for(i=lfd+1;i<=maxfd;i++){      //处理满足读事件的fd
+            if(FD_ISSET(i,&rset)){      //找到满足读事件的fd
+                n = read(i,buf,sizeof(buf));
+                if(n==0){               //检测到客户端关闭连接  
+                    close(i);
+                    FD_CLR(i,&gset);    //将关闭的fd移出监听集合
+                }else if(n==-1){
+                    cout<<"read error"<<endl;
+                }
+                //  业务逻辑
+                for(int j=0;j<n;j++)
+                    buf[j] = toupper(buf[j]);
+                write(i,buf,n);
+                write(STDOUT_FILENO,buf,n);
+            }
+        }
+    }
+    //关闭socket
+    close(lfd);
+    return 0;
+}
+```
+
+
+
+## poll
+
+### 简介
+
+
+
+### func
+
+```c
+#include<poll.h>
+int poll(struct pollfd *fds, nfds_t nfds, int timeout);
+/*
+args：
+	fds：监听的文件描述符 [数组]
+	nfds：实际有效监听个数
+	timeout：
+		>0：超时时长。单位：ms
+		-1：阻塞等待
+		0：不阻塞
+return：
+	返回满足对应监听事件的文件描述符 总个数
+*/
+struct pollfd{
+    int fd;			//待监听的文件描述符
+    short events;	//待监听的文件描述符对应监听事件
+    short revents;	//传入给0，如果满足对应事件，返回非0
+}
+```
+
+### template
+
+```c
+#define PORT 9999
+#define OPEN_MAX 1024
+#define MAXLINE 1024
+int main(){
+    int lfd,cfd;
+    socklen_t caddrlen;
+    char buf[BUFSIZ], client_ip_buf[1024];
+    //填写地址信息
+    struct sockaddr_in saddr,caddr;
+    saddr.sin_family = AF_INET;
+    saddr.sin_port = htons(PORT);
+    saddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    //创建socket
+    lfd = socket(AF_INET,SOCK_STREAM,0);
+    //绑定地址信息
+    bind(lfd,(struct sockaddr*)&saddr,sizeof(saddr));
+    //设置监听上限
+    listen(lfd,5);
+	//================================================= poll
+    int i=0,maxi=0,nready=0,n=0;
+    int sockfd;
+    struct pollfd client[OPEN_MAX];
+    client[0].fd = lfd;
+    client[0].events = POLLIN;
+    for(i=1;i<OPEN_MAX;i++)
+        client[i].fd = -1;
+
+    while(1){
+        nready = poll(client,maxi+1,-1);
+        if(client[0].revents & POLLIN){
+            caddrlen = sizeof(caddr);
+            cfd = accept(lfd,(struct sockaddr *)&caddr,&caddrlen);
+
+            for(i=1;i<OPEN_MAX;i++){
+                if(client[i].fd<0){
+                    client[i].fd = cfd;
+                    break;
+                }
+            }
+
+            if(i==OPEN_MAX)
+                cout<<"too many clients";
+            client[i].events = POLLIN;
+            if(i>maxi)
+                maxi = i;
+            if(--nready<=0)
+                continue;
+        }
+
+        for(i=1;i<=maxi;i++){
+            if((sockfd = client[i].fd)<0)
+                continue;
+            if(client[i].revents & POLLIN){
+                if((n = read(sockfd,buf,MAXLINE))<0|n==0){
+                    close(sockfd);
+                    client[i].fd = -1;
+                }else{
+                    for(int j=0;j<n;j++){
+                        buf[j] = toupper(buf[j]);
+                    }
+                    write(STDOUT_FILENO,buf,n);
+                    write(sockfd,buf,n);
+                }
+                if(--nready<=0)
+                    break;
+            }
+        }
+    }
+    //关闭socket
+    close(lfd);
+    return 0;
+}
+```
+
+
+
+## epoll
+
+### 简介
+
+优点：高效、突破1024限制
+
+缺点：不能跨平台
+
+### func
+
+```c
+#include <sys/epoll.h>
+int epoll_create(int size);	//创建一棵监听红黑树
+int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event);	//操作监听红黑树
+/*
+args：
+	epfd：epoll_create函数的返回值
+	op：对该监听红黑树做的操作
+		EPOLL_CTL_ADD	添加fd
+		EPOLL_CTL_MOD	修改fd
+		EPOLL_CTL_DEL	删除fd
+	fd：待监听的fd
+	event：本质是 struct epoll_event 结构体的地址
+		events：EPOLLIN/EPOLLOUT/EPOLLERR
+		data：union：
+			int fd;		对应监听事件的fd
+			void *ptr;
+			uint32_t u32;
+*/
+int epoll_wait(int epfd, struct epoll_event *events, int maxevents, int timeout);	//阻塞监听
+/*
+args：
+	epfd：epoll_create函数的返回值
+	events：传出参数，数组，满足监听条件的fd结构体数组
+	maxevents：数组元素总个数。1024
+	timeout：
+		-1：阻塞
+		0：不阻塞
+		>0：超时时间（毫秒）
+return：
+	>0：满足监听的总个数，可用作循环上限
+	0：没有fd满足
+	-1：errno
+*/
+```
+
+
+
+### template
+
+```c
+#define PORT 9999
+#define OPEN_MAX 1024
+#define MAX_LINE 1024
+int main(){
+    int lfd,cfd,n;
+    socklen_t caddrlen;
+    char buf[BUFSIZ], client_ip_buf[1024];
+    //填写地址信息
+    struct sockaddr_in saddr,caddr;
+    saddr.sin_family = AF_INET;
+    saddr.sin_port = htons(PORT);
+    saddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    //创建socket
+    lfd = socket(AF_INET,SOCK_STREAM,0);
+    //设置端口复用
+    int opt = 1;
+    setsockopt(lfd,SOL_SOCKET,SO_REUSEADDR,&opt,sizeof(opt));
+    //绑定地址信息
+    bind(lfd,(struct sockaddr*)&saddr,sizeof(saddr));
+    //设置监听上限
+    listen(lfd,128);
+	//=================================================================== epoll
+    int i=0,temp_fd;
+    ssize_t nready,efd,res;
+    efd = epoll_create(OPEN_MAX);           //创建epoll模型，efd指向红黑树根节点
+    struct epoll_event temp, eps[OPEN_MAX];
+    temp.events = EPOLLIN;temp.data.fd = lfd;       //指定lfd的监听事件为读
+    res = epoll_ctl(efd,EPOLL_CTL_ADD,lfd,&temp);   //将lfd及对应结构体设置到树上
+
+    while(1){
+        nready = epoll_wait(efd,eps,OPEN_MAX,-1);
+        for(i=0;i<nready;i++){
+            if(!(eps[i].events & EPOLLIN))      //如果不是读事件，继续循环
+                continue;
+            if(eps[i].data.fd == lfd){          //判断满足事件的fd是不是lfd
+                caddrlen = sizeof(caddr);
+                cfd = accept(lfd,(struct sockaddr*)&caddr,&caddrlen);
+                temp.events = EPOLLIN;temp.data.fd = cfd;
+                res = epoll_ctl(efd,EPOLL_CTL_ADD,cfd,&temp);
+            }else{                              //不是lfd，则执行业务函数
+                temp_fd = eps[i].data.fd;
+                n = read(temp_fd,buf,MAX_LINE);
+                if(n<=0){                          //出错或客户端关闭
+                    cout<<"read error"<<endl;
+                    epoll_ctl(efd,EPOLL_CTL_DEL,temp_fd,NULL);  //从红黑树摘除节点
+                    close(temp_fd);                             //关闭连接
+                }else{
+                    for(int j=0;j<n;j++){
+                        buf[j] = toupper(buf[j]);
+                    }
+                    write(STDOUT_FILENO,buf,n);
+                    write(temp_fd,buf,n);
+                }
+            }
+        }
+    }
+    //关闭socket
+    close(lfd);
+    return 0;
+}
+```
+
+
+
+### ET & LT
+
+epoll 事件有两种模型：
+
++ Edge Triggered：边缘触发，只有数据到来才触发，不管缓冲区中是否还有数据
++ Level Triggered：水平触发，只要有数据就触发
+
+![](imgs/ETLT.png)
+
+epoll 的 ET 模式高效，但只支持非阻塞模式
+
+```c
+struct epoll_event event;
+event.events = EPOLLIN|EPOLLET;
+epoll_ctl(epfd,EPOLL_CTL_ADD,cfd,&event);
+int flag = fcntl(cfd,F_GETFL);
+flag |= O_NONBLOCK;
+fcntl(cfd,F_SETFL,flag);
+```
+
+
+
+### 反应堆
+
 
 
