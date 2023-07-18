@@ -1,3 +1,7 @@
+# remote
+
+
+
 # 参考资料
 
 + TCP/IP 网络编程
@@ -863,4 +867,44 @@ fcntl(cfd,F_SETFL,flag);
 ### 反应堆
 
 
+
+
+
+# 线程池
+
+
+
+# UDP
+
+## 简介
+
+优点：传输速度快、效率高、开销小
+
+缺点：不稳定
+
+应用场景：对时效性要求较高场合、稳定性其次。如游戏、直播、视频会议等
+
+大公司在应用层采用数据校验协议以弥补UDP不足
+
+
+
+## func
+
+```c
+ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags, struct sockaddr *src_addr, socklen_t *addrlen);
+ssize_t sendto(int sockfd, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen);
+```
+
+
+
+## template
+
+```c
+//template
+
+```
+
+
+
+# libevent
 
