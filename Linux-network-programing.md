@@ -900,11 +900,219 @@ ssize_t sendto(int sockfd, const void *buf, size_t len, int flags, const struct 
 ## template
 
 ```c
-//template
+//server.cpp
+#define PORT 9999
+int main(){
+    int sockfd,n;
+    socklen_t caddrlen;
+    char buf[BUFSIZ], client_ip_buf[1024];
+    //填写地址信息
+    struct sockaddr_in saddr,caddr;
+    bzero(&saddr,sizeof(saddr));
+    saddr.sin_family = AF_INET;
+    saddr.sin_port = htons(PORT);
+    saddr.sin_addr.s_addr = htonl(INADDR_ANY);
+    //创建socket
+    sockfd = socket(AF_INET,SOCK_DGRAM,0);
+    //绑定地址信息
+    bind(sockfd,(struct sockaddr*)&saddr,sizeof(saddr));
+    //不用三次握手，省去中间步骤
+    cout<<"listening..."<<endl;
+    while(1){
+        caddrlen = sizeof(caddr);
+        n = recvfrom(sockfd,buf,BUFSIZ,0,(struct sockaddr *)&caddr,&caddrlen);
 
+        cout<<"client ip: "
+            <<inet_ntop(AF_INET,&caddr.sin_addr.s_addr,client_ip_buf,sizeof(client_ip_buf))
+            <<" port: "
+            <<ntohs(caddr.sin_port)
+            <<endl;
+
+        //业务函数
+        for(int i=0;i<n;i++){
+            buf[i] = toupper(buf[i]);
+        }
+        //写出数据
+        n = sendto(sockfd,buf,n,0,(struct sockaddr *)&caddr,sizeof(caddr));
+    }    
+    //关闭socket
+    close(sockfd);
+    return 0;
+}
+```
+
+```c
+//client.cpp
+#define SERV_PORT 9999
+int main(int argc, char const *argv[])
+{
+    cout<<"hello client"<<endl;
+    /* code */
+    int sockfd,n;
+    int counter = 5;
+    const char *sip = "127.0.0.1";
+    char buf[BUFSIZ];
+    //填写服务器地址信息
+    struct sockaddr_in saddr;
+    saddr.sin_family = AF_INET;
+    saddr.sin_port = htons(SERV_PORT);
+    inet_pton(AF_INET,sip,&saddr.sin_addr.s_addr);
+    //创建socket
+    sockfd = socket(AF_INET,SOCK_DGRAM,0);
+    //连接服务器
+    connect(sockfd,(struct sockaddr *)&saddr,sizeof(saddr));
+    while(fgets(buf,BUFSIZ,stdin)!=NULL){
+        //业务函数
+        n = sendto(sockfd,buf,strlen(buf),0,(struct sockaddr *)&saddr,sizeof(saddr));
+        n = recvfrom(sockfd,buf,BUFSIZ,0,NULL,0);
+        write(STDOUT_FILENO,buf,n);
+    }
+    //关闭socket
+    close(sockfd);
+    return 0;
+}
 ```
 
 
 
 # libevent
+
+## 简介
+
+libevent 是开源社区的一款高性能的 I/O 框架库，有如下特点：
+
+- 跨平台。Linux、Unix、Windows
+- 统一事件源。libevent 对 I/O 事件、信号和定时事件提供统一的处理。
+- 线程安全。libevent 使用 libevent_pthread 库来提供线程安全支持
+- 基于 Reactor 模式的实现
+
+
+
+## 框架
+
+![](imgs/libevent.png)
+
+1. 创建 event_base
+2. 创建事件 event
+3. 将事件添加到 event_base 上
+4. 循环监听事件满足
+5. 释放 event_base
+
+
+
+## func
+
+```c
+#include<event2/event.h>
+
+//主要函数
+struct event_base *event_base_new(void);	//初使化一个event base对象
+void event_base_free(struct event_base *base);	//释放一个event base对象
+int event_reinit(struct event_base *base);	//子进程使用，重新初使化一个已经存在的eventbase对象
+int event_base_loop(struct event_base *base, int flags);//循环监控在base中注册的事件，直到没有注册的事件 EVLOOP_ONCE、EVLOOP_NONBLOCK
+int event_base_dispatch(struct event_base *base);
+int event_base_loopexit(struct event_base *base, const structtimeval *tv);//退出循环，等待tv个时间后退出
+int event_base_loopbreak(struct event_base *base);//退出循环，不等待活动事件执行完，直接退出
+```
+
+```c
+//事件相关函数
+typedef void (*event_callback_fn)(evutil_socket_t fd,short,void*)
+struct event *event_new(struct event_base *base, evutil_socket_t fd, short what, event_callback_fn cb, void *arg);
+/*
+desc：创建事件
+args:
+	base: event_base_new() 返回值
+	fd:	绑定到event上的文件描述符
+	what: 对应的事件。EV_READ、EV_WRITE、EV_PERSIST(配合dispatch使用)
+	cb:	回调函数
+	arg: 回调函数的参数
+*/
+int event_add(struct event *ev, const struct timeval *tv);
+/*
+desc：添加事件到event_base
+args:
+	ev: event_new()返回值
+	tv：一般传NULL
+*/
+int event_free(struct event *ev);
+/*
+desc：销毁事件
+*/
+
+//了解即可
+int event_del(struct event *ev);
+/*
+desc：从event_base上摘下事件
+*/
+
+```
+
+## template
+
+```c
+//read.cpp
+void callback(evutil_socket_t fd,short what,void *arg){
+    char buf[1024] = {0};
+    int len = read(fd,buf,sizeof(buf));
+    if(len <= 0){
+        cout<<"fifo closed"<<endl;
+        return;
+    }
+    cout<<"read: "<<buf<<endl;
+    sleep(1);
+}
+int main(){
+    //创建fifo
+    unlink("testfifo");
+    mkfifo("testfifo",0644);
+    //打开fifo读端
+    int fd = open("testfifo",O_RDONLY|O_NONBLOCK);
+    //创建 event_base
+    struct event_base *base = event_base_new();
+    //创建事件
+    struct event *ev = NULL;
+    ev = event_new(base,fd,EV_READ|EV_PERSIST,callback,NULL);
+    //添加事件到base
+    event_add(ev,NULL);
+    //启动循环
+    event_base_dispatch(base);
+    //销毁base
+    event_base_free(base);
+    return 0;
+}
+```
+
+```c
+//write.cpp
+void callback(evutil_socket_t fd,short what,void *arg){
+    char buf[] = "hello libevent!";
+    write(fd,buf,sizeof(buf)+1);
+    sleep(1);
+}
+int main(){
+    //打开fifo读端
+    int fd = open("testfifo",O_WRONLY|O_NONBLOCK);
+    //创建 event_base
+    struct event_base *base = event_base_new();
+    //创建事件
+    struct event *ev = NULL;
+    ev = event_new(base,fd,EV_WRITE|EV_PERSIST,callback,NULL);
+    //添加事件到base
+    event_add(ev,NULL);
+    //启动循环
+    event_base_dispatch(base);
+    //销毁base
+    event_base_free(base);
+    return 0;
+}
+```
+
+
+
+## bufferevent
+
+
+
+
 
