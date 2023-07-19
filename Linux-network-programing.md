@@ -1019,7 +1019,7 @@ int event_base_loopbreak(struct event_base *base);//退出循环，不等待活�
 //事件相关函数
 typedef void (*event_callback_fn)(evutil_socket_t fd,short,void*)
 struct event *event_new(struct event_base *base, evutil_socket_t fd, short what, event_callback_fn cb, void *arg);
-/*
+/*===== event_new =====
 desc：创建事件
 args:
 	base: event_base_new() 返回值
@@ -1027,18 +1027,18 @@ args:
 	what: 对应的事件。EV_READ、EV_WRITE、EV_PERSIST(配合dispatch使用)
 	cb:	回调函数
 	arg: 回调函数的参数
-*/
+=========================*/
 int event_add(struct event *ev, const struct timeval *tv);
-/*
+/*===== event_add =====
 desc：添加事件到event_base
 args:
 	ev: event_new()返回值
 	tv：一般传NULL
-*/
+=========================*/
 int event_free(struct event *ev);
-/*
+/*===== event_free =====
 desc：销毁事件
-*/
+=========================*/
 
 //了解即可
 int event_del(struct event *ev);
@@ -1111,6 +1111,54 @@ int main(){
 
 
 ## bufferevent
+
+**func**
+
+```c
+struct bufferevent *bufferevent_socket_new(struct event_base *base, evutil_socket_t fd, int options);
+/*===== bufferevent_socket_new =====
+desc：通过一个已存在的socket描述符创建socket bufferevent
+args:
+	base： 关联的框架上下文
+	fd： 关联的文件描述符
+	options： 0或则BEV_OPT_*标识，一般只使用BEV_OPT_CLOSE_ON_FREE
+===================================*/
+void bufferevent_setcb(struct bufferevent *bufev,
+					bufferevent_data_cb readcb, 
+					bufferevent_data_cb writecb,
+					bufferevent_event_cb eventcb, 
+         			 void *cbarg);
+/*===== bufferevent_setcb =====
+desc：设置bufferevent事件的回调函数
+args：
+	bufev：需要设置回调函数的bufferevent事件
+	readcb：数据可读时的回调，可设置为NULL不进行监测
+	writecb：数据写入成功后进行回调通知，可设置为NULL不进行监测
+	eventcb：当文件描述符有事件发生时的回调
+	cbarg：回调调用时传入的自定义参数(readcb, writecb, and errorcb)
+===================================*/
+typedef void (*bufferevent_data_cb)(struct bufferevent *bev, void *ctx);
+//bev：触发回调的bufferevent		ctx：bufferevent_setcb方法中用户指定的参数
+//===================================
+size_t bufferevent_read(struct bufferevent *bufev, void *data, size_t size); 
+/*===== bufferevent_read =====
+desc：从bufferevent的读缓存区读取数据.
+args:
+	bufev： 关联的bufferevent
+	data： 数据指针，用来存储从bufferevent读缓存区读到的数据 
+	size： 数据字节数
+===================================*/
+int bufferevent_write(struct bufferevent *bufev,const void *data, size_t size);
+/*===== bufferevent_write =====
+desc：写数据到bufferevent的写缓存区.
+args:
+	bufev： 关联的bufferevent
+	data： 数据指针，从此来源中获取数据，以写入到bufferevent写缓存区
+	size： 数据字节数
+===================================*/
+```
+
+
 
 
 
