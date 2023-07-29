@@ -992,14 +992,6 @@ libevent 是开源社区的一款高性能的 I/O 框架库，有如下特点：
 
 ![](imgs/libevent.png)
 
-1. 创建 event_base
-2. 创建事件 event
-3. 将事件添加到 event_base 上
-4. 循环监听事件满足
-5. 释放 event_base
-
-
-
 ## func
 
 ```c
@@ -1049,6 +1041,14 @@ desc：从event_base上摘下事件
 ```
 
 ## template
+
+libevent 流程：
+
+1. 创建 event_base
+2. 创建事件 event
+3. 将事件添加到 event_base 上
+4. 循环监听事件满足
+5. 释放 event_base
 
 ```c
 //read.cpp
@@ -1261,8 +1261,38 @@ typedef void(*evconnlistener_cb)(struct evconnlistener *listener, evutil_socket_
 
 ### template
 
+服务端流程：
+
+1. 创建 event_base
+2. 创建服务器连接监听器 evconnlistener_new_bind()
+3. 在 evconnlistener_new_bind 的回调函数 evconnlistener_cb 中，处理接受连接后的操作
+4. 回调函数被调用，说明有新客户端连接上来。会得到一个新 fd，用于与客户端通信
+5. 使用 bufferevent_socket_new() 创建一个新 bufferevent 事件，将 fd 封装到这个事件对象中
+6. 使用 bufferevent_setcb 给这个事件对象的 read、write、event设置回调
+7. 设置 bufferevent 的读写缓冲区 enable / disable
+8. 接受、发送数据 bufferevent_read() / bufferevent_write()
+9. 启动循环监听
+10. 释放资源
+
 ```c
-//template
+//server.cpp
+
+```
+
+客户端流程：
+
+1. 创建 event_base
+2. 使用 bufferevent_socket_new 创建一个与服务器通信的 bufferevent 事件对象
+3. 使用 bufferevent_socket_connect() 连接服务器
+4. 使用 bufferevent_setcb() 给 bufferevent 对象的 read、write、event 设置回调
+5. 设置 bufferevent 对象的读写缓冲区 enable / disable
+6. 接受、发送数据 bufferevent_read() / bufferevent_write()
+7. 启动循环监听
+8. 释放资源
+
+```c
+//client.cpp
+
 ```
 
 
