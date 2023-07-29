@@ -1112,7 +1112,34 @@ int main(){
 
 ## bufferevent
 
-**func**
+### 简介
+
+bufferevent 是带有缓存区的事件对象，与常规 event 相对应，其主要应用于 socket 通信，具有两个缓冲区，**读缓冲**和**写缓冲**。读缓冲中有数据时，会触发读缓冲中的回调函数，在读缓冲回调函数中，内部数据只能读一次，使用 bufferevent_read() 从读缓冲中读数据；写缓冲中使用 bufferevent_write() 向写缓冲中写数据，一旦有数据，就会自动刷新，发送给对端，写数据完成后，写回调函数会被调用，表示成功写入数据（意义不大）。
+
+原理：bufferevent 有两个缓冲区，队列实现，读走没，先进先出
+
+​	读：有数据 --> 读回调函数调用 --> 使用 bufferevent_read()  --> 读数据
+
+​	写：使用 bufferevent_write() --> 向写缓冲中写数据 --> 该缓冲区有数据自动写出 --> 写完，回调函数被调用（鸡肋）
+
+### 架构
+
+①创建bufferevent
+
+②给bufferevent设置回调
+
+③销毁bufferevent
+
+**禁用和启用缓冲区**
+
+启动和关闭读缓冲、写缓冲可以实现半关闭
+启用缓冲区,通常用来启用bufferevent的read缓冲，因为默认情况下，写缓冲是enable的，而读缓冲是disable的
+
+**bufferevent实现客户端的连接和监听**
+
+bufferevent_connect()、evconnlistener_new_bind()
+
+### func
 
 ```c
 struct bufferevent *bufferevent_socket_new(struct event_base *base, evutil_socket_t fd, int options);
@@ -1123,6 +1150,12 @@ args:
 	fd： 关联的文件描述符
 	options： 0或则BEV_OPT_*标识，一般只使用BEV_OPT_CLOSE_ON_FREE
 ===================================*/
+void bufferevent_socket_free(struct bufferevent *ev);
+/*===== bufferevent_socket_new =====
+desc：销毁 bufferevent
+args:
+	ev： 关联的bufferevent
+===================================*/
 void bufferevent_setcb(struct bufferevent *bufev,
 					bufferevent_data_cb readcb, 
 					bufferevent_data_cb writecb,
@@ -1132,13 +1165,17 @@ void bufferevent_setcb(struct bufferevent *bufev,
 desc：设置bufferevent事件的回调函数
 args：
 	bufev：需要设置回调函数的bufferevent事件
-	readcb：数据可读时的回调，可设置为NULL不进行监测
-	writecb：数据写入成功后进行回调通知，可设置为NULL不进行监测
+	readcb：读缓冲回调，可设置为NULL不进行监测
+	writecb：写缓冲回调，可设置为NULL不进行监测
 	eventcb：当文件描述符有事件发生时的回调
 	cbarg：回调调用时传入的自定义参数(readcb, writecb, and errorcb)
 ===================================*/
 typedef void (*bufferevent_data_cb)(struct bufferevent *bev, void *ctx);
-//bev：触发回调的bufferevent		ctx：bufferevent_setcb方法中用户指定的参数
+//bev：触发回调的bufferevent	ctx：bufferevent_setcb方法中用户指定的参数
+typedef void (*bufferevent_event_cb)(struct bufferevent *bev, short events, void *ctx);
+//bev：触发回调的bufferevent		
+//events：不同标志位，代表不同事件。BEV_EVENT_CONNECTED常用，也可传NULL
+//ctx：bufferevent_setcb方法中用户指定的参数
 //===================================
 size_t bufferevent_read(struct bufferevent *bufev, void *data, size_t size); 
 /*===== bufferevent_read =====
@@ -1156,6 +1193,76 @@ args:
 	data： 数据指针，从此来源中获取数据，以写入到bufferevent写缓存区
 	size： 数据字节数
 ===================================*/
+int bufferevent_enable(struct bufferevent *bufev, short event);
+/*===== bufferevent_enable =====
+desc：启用bufferevent相关缓存区
+note：新建的bufferevent默认写缓存是enable，而读缓存是disable的
+args:
+	bufev： 关联的bufferevent
+	event： EV_READ、EV_WRITE、EV_READ|EV_WRITE
+===================================*/
+int bufferevent_disable(struct bufferevent *bufev, short event);
+/*===== bufferevent_disable =====
+desc：禁用bufferevent相关缓存区
+note：新建的bufferevent默认写缓存是enable，而读缓存是disable的
+args:
+	bufev： 关联的bufferevent
+	event： 
+===================================*/
+```
+
+### net
+
+```c
+//net
+int bufferevent_socket_connect(struct bufferevent *bev, struct sockaddr *address, int addrlen);
+/*===== bufferevent_connect =====
+desc：启用bufferevent相关缓存区
+note：新建的bufferevent默认写缓存是enable，而读缓存是disable的
+args:
+	bev： 关联的bufferevent
+	address： 
+	addrlen：
+===================================*/
+struct evconnlistener *evconnlistener_new_bind(
+	struct event_base *base,
+    evconnlistener_cb cb,
+    void *ptr,
+    unsigned flags,
+    int backlog,
+    const struct sockaddr *sa,
+    int socklen
+);
+/*===== evconnlistener_new_bind =====
+desc：启用bufferevent相关缓存区
+note：新建的bufferevent默认写缓存是enable，而读缓存是disable的
+args:
+	base： 
+	cb：监听回调函数
+	ptr：回调函数参数
+	flags：可识别的标志 （可以|）
+		LEV_OPT_CLOSE_ON_FREE：释放bufferevent时关闭底层传输端口。关闭底层套接字、释放底层bufferevent等
+		LEV_OPT_REUSEABLE：端口复用
+	backlog：listen的2参。传-1表使用默认最大值
+	sa：服务器ip+port
+	socklen：sa的大小
+===================================*/
+typedef void(*evconnlistener_cb)(struct evconnlistener *listener, evutil_socket_t sock, struct sockaddr *addr, int len, void *ptr);
+/*
+    listener：evconnlistener_new_bind返回的监听器
+    sock：用于通信的文件描述符
+    addr：客户端的 IP+端口
+    len：addr 的大小
+    ptr：外部ptr传递进来值
+*/
+```
+
+
+
+### template
+
+```c
+//template
 ```
 
 
