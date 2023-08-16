@@ -977,6 +977,8 @@ int main(int argc, char const *argv[])
 
 # libevent
 
+> g++ hello.cpp -o hello -levent
+
 ## 简介
 
 libevent 是开源社区的一款高性能的 I/O 框架库，有如下特点：
@@ -1091,7 +1093,7 @@ void callback(evutil_socket_t fd,short what,void *arg){
     sleep(1);
 }
 int main(){
-    //打开fifo读端
+    //打开fifo写端
     int fd = open("testfifo",O_WRONLY|O_NONBLOCK);
     //创建 event_base
     struct event_base *base = event_base_new();
@@ -1214,6 +1216,7 @@ args:
 ### net
 
 ```c
+#include<event2/listener.h>
 //net
 int bufferevent_socket_connect(struct bufferevent *bev, struct sockaddr *address, int addrlen);
 /*===== bufferevent_connect =====
@@ -1276,7 +1279,78 @@ typedef void(*evconnlistener_cb)(struct evconnlistener *listener, evutil_socket_
 
 ```c
 //server.cpp
+#include<iostream>
+#include<event2/event.h>
+#include<event2/listener.h>
+#include<event2/bufferevent.h>
+#include<strings.h>
+#include<unistd.h>
+#include<ctype.h>
+using namespace std;
 
+#define PORT 9999
+#define BUF_SIZE 1024
+//读回调函数，读时调用
+void read_cb(struct bufferevent *bev, void *ctx){
+    char buf[BUF_SIZE];
+    int n = bufferevent_read(bev,buf,BUF_SIZE);
+    for(int i=0;i<n;i++){
+        buf[i] = toupper(buf[i]);
+    }
+    write(STDOUT_FILENO,buf,n);
+    bufferevent_write(bev,buf,n);
+}
+//写回调函数，写完调用
+void write_cb(struct bufferevent *bev, void *ctx){
+    cout<<"write success! "<<endl;
+}
+//事件回调函数，事件发生时调用，一般处理资源释放
+void event_cb(struct bufferevent *bev, short events, void *ctx){
+    cout<<"event callback "<<endl;
+    if(events & BEV_EVENT_EOF){
+        cout<<"connection closed."<<endl;
+    }else if (events & BEV_EVENT_ERROR){
+        cout<<"some other error."<<endl;
+    }
+    bufferevent_free(bev);
+    cout<<"bufferevent is freed."<<endl;
+}
+//监听回调函数，有客户端连接时调用，在这里创建bufferevent
+void listener_cb(struct evconnlistener *listener, evutil_socket_t sock, struct sockaddr *addr, int len, void *ptr){
+    cout<<"new client connected!"<<endl;
+    struct event_base *base = (struct event_base *)ptr;
+    struct bufferevent *bev = bufferevent_socket_new(base,sock,BEV_OPT_CLOSE_ON_FREE);
+    bufferevent_setcb(
+        bev,
+        read_cb,
+        write_cb,
+        event_cb,
+        NULL//回调函数参数
+    );
+    bufferevent_enable(bev,EV_READ);
+}
+int main(){
+    struct sockaddr_in sa;
+    bzero(&sa,sizeof(sa));
+    sa.sin_family = AF_INET;
+    sa.sin_port = htons(PORT);
+    sa.sin_addr.s_addr = htonl(INADDR_ANY);
+    //主函数中只创建 event_base 和 evconnlistener
+    struct event_base *base = event_base_new();
+    struct evconnlistener *listener = evconnlistener_new_bind(
+        base,
+        listener_cb,
+        base,
+        LEV_OPT_CLOSE_ON_FREE|LEV_OPT_REUSEABLE,
+        -1,
+        (struct sockaddr *)&sa,
+        sizeof(sa)
+    );
+    event_base_dispatch(base);//主循环
+    //资源释放
+    evconnlistener_free(listener);
+    event_base_free(base);
+}
 ```
 
 客户端流程：
@@ -1294,6 +1368,12 @@ typedef void(*evconnlistener_cb)(struct evconnlistener *listener, evutil_socket_
 //client.cpp
 
 ```
+
+
+
+# Web
+
+
 
 
 
